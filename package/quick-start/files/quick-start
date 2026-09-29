@@ -1,0 +1,313 @@
+#!/bin/sh
+#===============================================================================
+#  ImmortalWrt Quick Start —— 交互式快速启动菜单（仿 PandaWrt / Fancontrol）
+#
+#  用法:
+#    quick-start        进入交互式菜单
+#    quick-start info   只打印一次系统信息（供脚本/面板调用）
+#
+#  兼容性: POSIX sh / busybox ash（OpenWrt 默认），无 bash 依赖，无 uci 也能运行。
+#          PKGARCH=all，纯脚本，x86 / ARM 等任意目标均可编译使用。
+#  语言:   默认中文；可用  QS_LANG=en 环境变量，或
+#          uci set quickstart.@global[0].lang='en'  切换英文。
+#  工作模式等字段可用 uci 覆盖（见下方说明），其余字段自动探测。
+#===============================================================================
+
+#--------------- 工具检测 --------------
+HAVE_UCI=0
+command -v uci >/dev/null 2>&1 && HAVE_UCI=1
+
+#--------------- 语言设置（zh 默认 / en）--------------
+if [ "$HAVE_UCI" = "1" ]; then
+    _l=$(uci get quickstart.@global[0].lang 2>/dev/null)
+    [ -n "$_l" ] && QS_LANG="$_l"
+fi
+QS_LANG="${QS_LANG:-zh}"
+
+if [ "$QS_LANG" = "en" ]; then
+    # ---- English ----
+    T_QS="Quick Start"; T_CPU="CPU Usage"; T_MEM="Mem Usage"
+    T_SES="Sessions"; T_CLI="Clients"; T_MODE="Work Mode"; T_IP="IP Address"; T_NONE="(none)"
+    T_M1="Quick Start: Set LAN static IP (wizard)"
+    T_M2="Toggle LAN static <-> DHCP"
+    T_M3="Show network interfaces (ifconfig)"
+    T_M4="Show process info (ps)"
+    T_M5="Monitor online clients"
+    T_M6="Enter Shell"
+    T_PROMPT="Select [1-6] (q to quit) > "
+    T_INVALID="Invalid choice: "
+    T_ENTERED_SHELL="Entered shell."
+    T_NEED_UCI="This needs uci (available on OpenWrt/ImmortalWrt)."
+    T_NEED_UCI2="This needs uci."
+    T_RESTARTING="Restarting network..."
+    T_NO_NETWORK="(no /etc/init.d/network found; restart network manually)"
+    T_SETLAN_TITLE="---- Set LAN static IP ----"
+    T_CUR_IP="Current IP: "
+    T_IP_PROMPT="Enter LAN IP [Enter to skip] > "
+    T_MASK_PROMPT="Enter netmask (default 255.255.255.0) > "
+    T_GW_PROMPT="Enter gateway [optional] > "
+    T_UNSET="<unset>"
+    T_TOG2S="---- LAN is DHCP, switching to static ----"
+    T_IP2="Enter IP (default 192.168.1.1) > "
+    T_TOGS2="---- LAN is static, switching to DHCP ----"
+    T_IFCONFIG="---- ifconfig ----"
+    T_PS="---- ps ----"
+    T_CLIENTS="---- DHCP online clients ----"
+    T_NO_LEASE="No DHCP lease file"
+    T_ARP="---- Neighbor table (ARP) ----"
+    T_ENTER="(press Enter to return)"
+else
+    # ---- 中文（默认）----
+    T_QS="Quick Start"; T_CPU="CPU Usage"; T_MEM="Mem Usage"
+    T_SES="Sessions"; T_CLI="Clients"; T_MODE="Work Mode"; T_IP="IP Address"; T_NONE="(none)"
+    T_M1="Quick Start: 设置 LAN 静态 IP（向导）"
+    T_M2="切换 LAN static <-> DHCP"
+    T_M3="查看网络接口 (ifconfig)"
+    T_M4="查看程序信息 (ps)"
+    T_M5="监控在线客户端"
+    T_M6="进入 Shell"
+    T_PROMPT="请选择 [1-6] (q 退出) > "
+    T_INVALID="无效选择: "
+    T_ENTERED_SHELL="已进入 Shell。"
+    T_NEED_UCI="此功能需要 uci（在 OpenWrt/ImmortalWrt 上可用）。"
+    T_NEED_UCI2="此功能需要 uci。"
+    T_RESTARTING="正在重启网络..."
+    T_NO_NETWORK="（未找到 /etc/init.d/network，请手动重启网络）"
+    T_SETLAN_TITLE="---- 设置 LAN 静态 IP ----"
+    T_CUR_IP="当前 IP: "
+    T_IP_PROMPT="输入 LAN IP [回车跳过] > "
+    T_MASK_PROMPT="输入掩码 (默认 255.255.255.0) > "
+    T_GW_PROMPT="输入网关 [可留空] > "
+    T_UNSET="<未设置>"
+    T_TOG2S="---- LAN 当前为 DHCP，切换为 static ----"
+    T_IP2="输入 IP (默认 192.168.1.1) > "
+    T_TOGS2="---- LAN 当前为 static，切换为 DHCP ----"
+    T_IFCONFIG="---- ifconfig ----"
+    T_PS="---- ps ----"
+    T_CLIENTS="---- DHCP 在线客户端 ----"
+    T_NO_LEASE="暂无 DHCP 租约文件"
+    T_ARP="---- 邻居表 (ARP) ----"
+    T_ENTER="（按回车返回）"
+fi
+
+#--------------- 颜色（非终端自动禁用）--------------
+C_RST=''; C_B=''; C_DIM=''; C_GRN=''; C_YEL=''; C_CYN=''; C_RED=''
+if [ -t 1 ] && [ -z "$NO_COLOR" ]; then
+    C_RST='\033[0m'; C_B='\033[1m'; C_DIM='\033[2m'
+    C_GRN='\033[32m'; C_YEL='\033[33m'; C_CYN='\033[36m'; C_RED='\033[31m'
+fi
+
+#--------------- 信息采集 --------------
+get_hostname() {
+    if [ "$HAVE_UCI" = "1" ]; then
+        h=$(uci get system.@system[0].hostname 2>/dev/null)
+        [ -n "$h" ] && { printf '%s' "$h"; return; }
+    fi
+    cat /proc/sys/kernel/hostname 2>/dev/null
+}
+
+# CPU 使用率（%），采样两次 /proc/stat
+cpu_usage() {
+    c1=$(awk '/^cpu /{print $2+$3+$4" "$5+$6}' /proc/stat 2>/dev/null)
+    sleep 0.3
+    c2=$(awk '/^cpu /{print $2+$3+$4" "$5+$6}' /proc/stat 2>/dev/null)
+    [ -z "$c1" ] || [ -z "$c2" ] && { printf '?'; return; }
+    set -- $c1; w1=$1; i1=$2
+    set -- $c2; w2=$1; i2=$2
+    dtot=$(( (w2 + i2) - (w1 + i1) ))
+    dwork=$(( w2 - w1 ))
+    if [ "$dtot" -gt 0 ]; then
+        printf '%d' $(( dwork * 100 / dtot ))
+    else
+        printf '0'
+    fi
+}
+
+# 内存行，形如 "33MB/472MB (8%)"
+mem_line() {
+    awk '/MemTotal:/{t=$2} /MemAvailable:/{a=$2} END{
+        if(t<=0){print "?/?"; exit}
+        if(a<0)a=0
+        used=(t-a)/1024; tot=t/1024
+        pct=int((t-a)*100/t)
+        printf "%dMB/%dMB (%d%%)", used, tot, pct }' /proc/meminfo 2>/dev/null
+}
+
+# 网络会话数（conntrack）
+sessions() {
+    if [ -r /proc/sys/net/netfilter/nf_conntrack_count ]; then
+        cat /proc/sys/net/netfilter/nf_conntrack_count
+    elif [ -r /proc/net/nf_conntrack ]; then
+        wc -l < /proc/net/nf_conntrack
+    else
+        printf '0'
+    fi
+}
+
+# 在线客户端数（DHCP 租约）
+client_num() {
+    if [ -r /tmp/dhcp.leases ]; then
+        wc -l < /tmp/dhcp.leases
+    else
+        printf '0'
+    fi
+}
+
+# 工作模式：默认 Router Mode，可用 uci 覆盖
+#   uci set quickstart.@global[0].work_mode='Bypass Mode'
+work_mode() {
+    if [ "$HAVE_UCI" = "1" ]; then
+        m=$(uci get quickstart.@global[0].work_mode 2>/dev/null)
+        [ -n "$m" ] && { printf '%s' "$m"; return; }
+    fi
+    printf 'Router Mode'
+}
+
+# 列出各接口 IPv4 地址
+print_ips() {
+    if command -v ip >/dev/null 2>&1; then
+        ip -o -4 addr show 2>/dev/null | awk '
+            $4!="127.0.0.1/8" && $4!="127.0.0.1/32" {
+                ip=$4; sub(/\/.*/,"",ip); printf "    %s: %s\n", $2, ip }'
+    else
+        ifconfig 2>/dev/null | awk '
+            /^[a-zA-Z]/ { iface=$1; next }
+            /inet / { printf "    %s: %s\n", iface, $2 }'
+    fi
+}
+
+#--------------- 信息面板 --------------
+print_header() {
+    printf "%b\n" "${C_B}============================================================${C_RST}"
+    printf "%b  %s %s${C_RST}\n" "${C_GRN}${C_B}" "$(get_hostname)" "$T_QS"
+    printf "%b\n" "============================================================"
+    printf "  %-12s: %s\n" "$T_CPU"   "$(cpu_usage)%"
+    printf "  %-12s: %s\n" "$T_MEM"   "$(mem_line)"
+    printf "  %-12s: %s\n" "$T_SES"   "$(sessions)"
+    printf "  %-12s: %s\n" "$T_CLI"   "$(client_num)"
+    printf "  %-12s: %s\n" "$T_MODE"  "$(work_mode)"
+    printf "  %-12s:\n" "$T_IP"
+    ips=$(print_ips); [ -n "$ips" ] && printf "%s\n" "$ips" || printf "    %s\n" "$T_NONE"
+}
+
+#--------------- 动作实现 --------------
+restart_network() {
+    if [ -x /etc/init.d/network ]; then
+        echo "$T_RESTARTING"
+        /etc/init.d/network restart
+    else
+        echo "$T_NO_NETWORK"
+    fi
+}
+
+# [1] Quick Start：设置 LAN IP 向导
+qs_set_lan() {
+    [ "$HAVE_UCI" = "1" ] || { echo "$T_NEED_UCI"; return; }
+    cur_ip=$(uci get network.lan.ipaddr 2>/dev/null)
+    echo "$T_SETLAN_TITLE"
+    printf "%s%s\n" "$T_CUR_IP" "${cur_ip:-$T_UNSET}"
+    printf "%s" "$T_IP_PROMPT"; read -r ip
+    printf "%s" "$T_MASK_PROMPT"; read -r mask
+    [ -z "$mask" ] && mask="255.255.255.0"
+    printf "%s" "$T_GW_PROMPT"; read -r gw
+
+    uci set network.lan.proto='static'
+    [ -n "$ip" ] && uci set network.lan.ipaddr="$ip"
+    [ -n "$mask" ] && uci set network.lan.netmask="$mask"
+    if [ -n "$gw" ]; then
+        uci set network.lan.gateway="$gw"
+    else
+        uci delete network.lan.gateway 2>/dev/null
+    fi
+    uci commit network
+    restart_network
+}
+
+# [2] LAN static <-> DHCP 切换
+qs_toggle_proto() {
+    [ "$HAVE_UCI" = "1" ] || { echo "$T_NEED_UCI2"; return; }
+    proto=$(uci get network.lan.proto 2>/dev/null)
+    if [ "$proto" = "dhcp" ]; then
+        echo "$T_TOG2S"
+        printf "%s" "$T_IP2"; read -r ip
+        [ -z "$ip" ] && ip="192.168.1.1"
+        printf "%s" "$T_MASK_PROMPT"; read -r mask
+        [ -z "$mask" ] && mask="255.255.255.0"
+        uci set network.lan.proto='static'
+        uci set network.lan.ipaddr="$ip"
+        uci set network.lan.netmask="$mask"
+        uci commit network
+    else
+        echo "$T_TOGS2"
+        uci set network.lan.proto='dhcp'
+        uci delete network.lan.ipaddr 2>/dev/null
+        uci delete network.lan.netmask 2>/dev/null
+        uci delete network.lan.gateway 2>/dev/null
+        uci commit network
+    fi
+    restart_network
+}
+
+# [3] 网络接口
+qs_ifconfig() { echo "$T_IFCONFIG"; ifconfig -a 2>/dev/null || ifconfig 2>/dev/null; }
+
+# [4] 程序信息
+qs_ps() { echo "$T_PS"; ps w 2>/dev/null || ps aux 2>/dev/null; }
+
+# [5] 监控在线客户端
+qs_clients() {
+    echo "$T_CLIENTS"
+    if [ -r /tmp/dhcp.leases ]; then
+        awk '{printf "%-15s  %s  %s\n", $3, $4, $2}' /tmp/dhcp.leases
+    else
+        echo "$T_NO_LEASE"
+    fi
+    echo "$T_ARP"
+    if command -v ip >/dev/null 2>&1; then
+        ip neigh 2>/dev/null | awk '$1!="fe80"{print "    " $1 "  via " $3 "  " $5}'
+    else
+        arp -n 2>/dev/null
+    fi
+    echo "$T_ENTER"; read -r _
+}
+
+#--------------- 主菜单 --------------
+menu() {
+    while :; do
+        printf "\n%b\n" "${C_B}------------------------------------------------------------${C_RST}"
+        printf "%b[1]%b %s\n" "$C_GRN$C_B" "$C_RST" "$T_M1"
+        printf "%b[2]%b %s\n" "$C_GRN$C_B" "$C_RST" "$T_M2"
+        printf "%b[3]%b %s\n" "$C_GRN$C_B" "$C_RST" "$T_M3"
+        printf "%b[4]%b %s\n" "$C_GRN$C_B" "$C_RST" "$T_M4"
+        printf "%b[5]%b %s\n" "$C_GRN$C_B" "$C_RST" "$T_M5"
+        printf "%b[6]%b %s\n" "$C_GRN$C_B" "$C_RST" "$T_M6"
+        printf "%b\n" "${C_B}------------------------------------------------------------${C_RST}"
+        printf "%s" "$T_PROMPT"
+        read -r ans
+        case "$ans" in
+            1) qs_set_lan ;;
+            2) qs_toggle_proto ;;
+            3) qs_ifconfig ;;
+            4) qs_ps ;;
+            5) qs_clients ;;
+            6|s|shell) echo "$T_ENTERED_SHELL"; break ;;
+            q|Q|exit) break ;;
+            *) echo "$T_INVALID$ans" ;;
+        esac
+    done
+    return 0
+}
+
+#--------------- 入口 --------------
+case "${1:-menu}" in
+    info)
+        print_header
+        ;;
+    *)
+        # 欢迎 + 菜单
+        clear 2>/dev/null || true
+        print_header
+        menu
+        ;;
+esac
+exit 0

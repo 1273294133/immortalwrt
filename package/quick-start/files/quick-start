@@ -159,7 +159,11 @@ print_header() {
 restart_network() {
     if [ -x /etc/init.d/network ]; then
         echo "$T_RESTARTING"
-        /etc/init.d/network restart
+        # 静默重启：丢弃脚本输出，并临时调低控制台日志级别，避免 kernel 网络日志刷屏
+        pk=$(cat /proc/sys/kernel/printk 2>/dev/null)
+        echo "0 4 1 7" > /proc/sys/kernel/printk 2>/dev/null
+        /etc/init.d/network restart >/dev/null 2>&1
+        [ -n "$pk" ] && echo "$pk" > /proc/sys/kernel/printk 2>/dev/null
     else
         echo "$T_NO_NETWORK"
     fi
@@ -266,6 +270,9 @@ qs_clients() {
 #--------------- 主菜单 --------------
 menu() {
     while :; do
+        # 每次回到菜单都清屏重画，保持界面干净（只显示 quick-start 清单）
+        clear 2>/dev/null || true
+        print_header
         printf "\n%b\n" "${C_B}------------------------------------------------------------${C_RST}"
         printf "%b[1]%b %s\n" "$C_GRN$C_B" "$C_RST" "$T_M1"
         printf "%b[2]%b %s\n" "$C_GRN$C_B" "$C_RST" "$T_M2"
@@ -296,9 +303,7 @@ case "${1:-menu}" in
         print_header
         ;;
     *)
-        # 欢迎 + 菜单
-        clear 2>/dev/null || true
-        print_header
+        # 进入菜单（菜单循环内自行清屏并画 header）
         menu
         ;;
 esac

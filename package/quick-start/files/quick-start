@@ -245,10 +245,18 @@ qs_toggle_proto() {
 }
 
 # [3] 网络接口
-qs_ifconfig() { echo "$T_IFCONFIG"; ifconfig -a 2>/dev/null || ifconfig 2>/dev/null; }
+qs_ifconfig() {
+    echo "$T_IFCONFIG"
+    ifconfig -a 2>/dev/null || ifconfig 2>/dev/null
+    echo "$T_ENTER"; read -r _
+}
 
 # [4] 程序信息
-qs_ps() { echo "$T_PS"; ps w 2>/dev/null || ps aux 2>/dev/null; }
+qs_ps() {
+    echo "$T_PS"
+    ps w 2>/dev/null || ps aux 2>/dev/null
+    echo "$T_ENTER"; read -r _
+}
 
 # [5] 监控在线客户端
 qs_clients() {

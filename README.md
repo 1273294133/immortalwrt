@@ -1,3 +1,40 @@
+<!-- ================= 中文快速说明（本仓库新增） ================= -->
+
+## 📦 本仓库说明（虚拟机镜像自动构建）
+
+本仓库是 [ImmortalWrt](https://github.com/immortalwrt/immortalwrt) 的 fork，额外内置了一套 **GitHub Actions 自动构建虚拟机镜像** 的工作流，并把仿 PandaWrt 的 **quick-start 登录菜单** 直接打进固件（登录 SSH 后会自动显示信息面板和菜单）。
+
+### ⬇️ 镜像发布在 Releases
+
+- **[x86_64 虚拟机镜像](https://github.com/1273294133/immortalwrt/releases)**：tag 前缀 `vm-images-x86_64-`
+- **[armv8 (ARM64) 虚拟机镜像](https://github.com/1273294133/immortalwrt/releases)**：tag 前缀 `vm-images-armv8-`
+
+### 🖥️ 虚拟机格式对照
+
+| 文件后缀 | 适用平台 |
+|---|---|
+| `*.qcow2.gz` | **PVE / Proxmox**（直接导入即可） |
+| `*.vmdk.gz` | **ESXi / VMware** |
+| `*.vdi.gz` | VirtualBox |
+| `*.vhdx.gz` | Hyper-V |
+| `*.img.gz` | 通用 / 直接写盘（dd） |
+
+> 建议优先用 `*-combined-*`（ext4 可启动整盘）版本；`*-combined-efi-*` 为 UEFI 引导版，老机器/BIOS 用不带 `efi` 的版本。armv8 仅提供 UEFI 引导。
+
+### 🚀 使用方法
+
+1. 到 [Releases](https://github.com/1273294133/immortalwrt/releases) 下载对应架构的 `.gz` 文件并解压；
+2. **PVE**：在虚拟机里新建“不使用介质”，磁盘导入 `qcow2` 文件，引导选 BIOS（或 UEFI，视版本）；
+3. **ESXi**：把 `vmdk` 上传到数据存储，新建虚拟机时挂载该磁盘；
+4. 开机后默认地址 **http://192.168.1.1**（或 `http://immortalwrt.lan`），用户名 `root`，无密码；
+5. SSH 登录即可看到 **quick-start** 登录菜单（信息面板 + 菜单）。
+
+### 🔧 手动触发构建 / 发布
+
+仓库 → **Actions** → 选择 **“构建 ImmortalWrt 虚拟机镜像 (x86_64 + armv8)”** → **Run workflow**（选 master 分支）。构建完成后会自动把 x86_64、armv8 分别发布为两个独立 Release。
+
+<!-- ================= 以下为上游原 README ================= -->
+
 <img src="https://avatars.githubusercontent.com/u/53193414?s=200&v=4" alt="logo" width="200" height="200" align="right">
 
 # Project ImmortalWrt

@@ -116,22 +116,46 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with: { name: immortalwrt-x86_64-vm-images, path: x86_64 }
       - uses: actions/download-artifact@v4
         with: { name: immortalwrt-armv8-vm-images, path: armv8 }
 
-      - name: 计算 Release 标签
-        id: tag
-        run: echo "TAG=vm-images-$(date +%Y%m%d-%H%M%S)" >> "$GITHUB_OUTPUT"
+      - name: 发布 x86_64 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="vm-images-x86_64-$(date +%Y%m%d-%H%M%S)"
+          FILES=$(find x86_64 -name '*.gz')
+          gh release create "$TAG" \
+            --title "ImmortalWrt x86_64 虚拟机镜像 $TAG" \
+            --notes "ImmortalWrt 25.12.2 x86_64 虚拟机镜像（已集成 quick-start 登录菜单）
 
-      - name: 发布 GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.tag.outputs.TAG }}
-          name: "ImmortalWrt VM images ${{ steps.tag.outputs.TAG }}"
-          files: |
-            x86_64/**/*.gz
-            armv8/**/*.gz
-          generate_release_notes: true
+**使用方法**
+- \`*.qcow2.gz\` → PVE / Proxmox
+- \`*.vmdk.gz\` → ESXi / VMware
+- \`*.vdi.gz\` → VirtualBox
+- \`*.vhdx.gz\` → Hyper-V
+- \`*.img.gz\` → 通用 / 直接写盘
+- \`*-combined-efi*\` 为 UEFI 引导版，普通 BIOS 用不带 \`efi\` 的版本" \
+            $FILES
+
+      - name: 发布 armv8 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="vm-images-armv8-$(date +%Y%m%d-%H%M%S)"
+          FILES=$(find armv8 -name '*.gz')
+          gh release create "$TAG" \
+            --title "ImmortalWrt armv8 虚拟机镜像 $TAG" \
+            --notes "ImmortalWrt 25.12.2 armv8 (ARM64) 虚拟机镜像（已集成 quick-start 登录菜单）
+
+**使用方法**
+- \`*.img.gz\` → 通用 / PVE / ESXi / 直接写盘
+- \`*.qcow2.gz\` → PVE / Proxmox
+- \`*.vmdk.gz\` → ESXi / VMware
+- 说明：armv8 仅支持 UEFI 引导（无 BIOS 版）" \
+            $FILES

@@ -132,6 +132,6 @@ jobs:
           tag_name: ${{ steps.tag.outputs.TAG }}
           name: "ImmortalWrt VM images ${{ steps.tag.outputs.TAG }}"
           files: |
-            x86_64/*
-            armv8/*
+            x86_64/**/*.gz
+            armv8/**/*.gz
           generate_release_notes: true

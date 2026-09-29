@@ -1,18 +1,18 @@
 # ============================================================
-# 构建 ImmortalWrt 虚拟机镜像（ESXi / PVE / ARM）
+# 构建 ImmortalWrt 虚拟机镜像（ESXi / PVE / ARM）— ImageBuilder 版
 # 适用仓库：1273294133/immortalwrt
 #
-# 矩阵并行构建两种目标，一次跑完你需要的全部虚拟机镜像：
-#   x86_64  -> combined.img.gz / combined-efi.img.gz
-#              + combined.qcow2 (PVE) + combined.vmdk (ESXi)
-#   armv8   -> armsr/armv8 combined-efi.img.gz (raw)
-#              + combined-efi.qcow2 (PVE-ARM) + combined-efi.vmdk (ESXi-ARM)
+# 方案说明：
+#   直接使用官方 ImageBuilder（预编译好的工具链 + 软件包）组装镜像，
+#   不编译 gcc/musl 等交叉工具链，几分钟即可完成，标准 GitHub runner 也能跑。
+#   你的 fork 与上游一致，产物与官方发布相同；quick-start 通过 FILES 覆盖层打进去。
 #
-# 两种目标都会打包自定义包 quick-start（登录快速启动菜单），
-# 前提：把项目根目录的 quick-start/ 复制到你的 fork 源码 package/quick-start/。
+# 产物：
+#   x86_64 -> combined.img.gz / combined-efi.img.gz + qcow2(PVE) + vmdk(ESXi)
+#   armv8  -> armsr/armv8 combined-efi.img.gz + qcow2(PVE-ARM) + vmdk(ESXi-ARM)
 #
-# 触发：workflow_dispatch 手动运行；或 push 命中 target/package/config 等路径。
-# 产物：Actions Artifacts；手动运行时自动发布 GitHub Release。
+# 触发：workflow_dispatch 手动；或 push 命中本工作流 / package/quick-start 路径。
+# 若你后续改了内核/软件包源码（非纯脚本），需改用源码全量编译，见使用说明。
 # ============================================================
 
 name: 构建 ImmortalWrt 虚拟机镜像 (x86_64 + armv8)
@@ -22,100 +22,79 @@ on:
   push:
     branches: [ master ]
     paths:
-      - 'target/**'
-      - 'package/**'
-      - 'config/**'
-      - 'feeds.conf*'
-      - 'dl/**'
       - '.github/workflows/build-vm-images.yml'
-
-concurrency:
-  group: build-immortalwrt-vm
-  cancel-in-progress: false
+      - 'package/quick-start/**'
 
 env:
-  # 额外软件包（空格分隔，可留空；需在 feeds 中存在）
-  PACKAGES: ""
+  RELEASE: 25.12.2
+  BASE: https://downloads.immortalwrt.org/releases
 
 jobs:
   build:
     name: ${{ matrix.name }}
-    runs-on: ubuntu-22.04
-    timeout-minutes: 360
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: x86_64
             target_dir: x86/64
-            target_cfg: |
-              CONFIG_TARGET_x86=y
-              CONFIG_TARGET_x86_64=y
-              CONFIG_TARGET_x86_64_DEVICE_generic=y
+            ib_name: immortalwrt-imagebuilder-25.12.2-x86-64.Linux-x86_64.tar.zst
             artifact: immortalwrt-x86_64-vm-images
           - name: armv8
             target_dir: armsr/armv8
-            target_cfg: |
-              CONFIG_TARGET_armsr=y
-              CONFIG_TARGET_armsr_armv8=y
-              CONFIG_TARGET_armsr_armv8_DEVICE_generic=y
+            ib_name: immortalwrt-imagebuilder-25.12.2-armsr-armv8.Linux-x86_64.tar.zst
             artifact: immortalwrt-armv8-vm-images
 
     steps:
       - name: 检出源码
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
-      - name: 安装编译依赖
+      - name: 安装依赖
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
-            gettext git libncurses-dev libssl-dev python3 python3-pip python3-setuptools \
-            rsync swig unzip zlib1g-dev file wget qemu-utils cpio libelf-dev \
-            jq pigz zstd
+            build-essential gettext python3 rsync wget unzip zstd qemu-utils cpio gawk file
 
-      - name: 更新 feeds
+      - name: 下载并解压 ImageBuilder（${{ matrix.name }}）
         run: |
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          curl -fL --retry 5 -o ib.tar.zst "$BASE/$RELEASE/targets/${{ matrix.target_dir }}/${{ matrix.ib_name }}"
+          tar --zstd -xf ib.tar.zst
+          ls -d immortalwrt-imagebuilder-*
 
-      - name: 生成配置（${{ matrix.name }}，ext4 根文件系统 + gzip + EFI）
+      - name: 准备 quick-start 覆盖层（FILES）
         run: |
-          printf '%s\n' \
-            'CONFIG_TARGET_ROOTFS_EXT4FS=y' \
-            'CONFIG_TARGET_IMAGES_GZIP=y' \
-            'CONFIG_TARGET_EFI_IMAGES=y' \
-            'CONFIG_TARGET_KERNEL_PARTSIZE=16' \
-            'CONFIG_TARGET_ROOTFS_PARTSIZE=300' \
-            '# 打包自定义包 quick-start（登录快速启动菜单）' \
-            'CONFIG_PACKAGE_quick-start=y' \
-            '${{ matrix.target_cfg }}' > .config
-          make defconfig
+          mkdir -p files/usr/bin files/etc/profile.d
+          cp package/quick-start/files/quick-start      files/usr/bin/quick-start
+          cp package/quick-start/files/quick-start.profile files/etc/profile.d/quick-start.sh
+          chmod +x files/usr/bin/quick-start files/etc/profile.d/quick-start.sh
+          IB=$(ls -d immortalwrt-imagebuilder-*)
+          mv files "$IB/files"
 
-      - name: 编译固件（${{ matrix.name }}）
+      - name: 组装镜像（${{ matrix.name }}）
         run: |
-          make -j$(nproc) V=s
+          IB=$(ls -d immortalwrt-imagebuilder-*)
+          cd "$IB"
+          make image PROFILE=generic FILES=files PACKAGES="" V=s
+          echo "== 镜像目录 =="
+          ls -lh bin/targets/${{ matrix.target_dir }}
 
-      - name: 转换并打包虚拟机磁盘镜像（${{ matrix.name }}）
+      - name: 转换 qcow2/vmdk 并压缩（${{ matrix.name }}）
         run: |
           set -e
-          cd bin/targets/${{ matrix.target_dir }}
-          echo "== 原始镜像 =="
-          ls -lh *.img.gz 2>/dev/null || true
-
-          # 1) 解压可启动整盘镜像（combined / combined-efi；rootfs 独立镜像不动）
+          IB=$(ls -d immortalwrt-imagebuilder-*)
+          cd "$IB/bin/targets/${{ matrix.target_dir }}"
+          # 解压可启动整盘（combined / combined-efi）
           for f in *combined*.img.gz; do gzip -dk "$f"; done
-
-          # 2) 用 qemu-img 生成 qcow2（PVE）与 vmdk（ESXi）
+          # qcow2（PVE）与 vmdk（ESXi）
           for img in *combined*.img; do
             base="${img%.img}"
             qemu-img convert -f raw -O qcow2 "$img" "${base}.qcow2"
             qemu-img convert -f raw -O vmdk -o subformat=streamOptimized,compat6 "$img" "${base}.vmdk"
           done
-
-          # 3) 重新压缩便于上传
           gzip -9 *combined*.qcow2 *combined*.vmdk *combined*.img
           echo "== 虚拟机磁盘产物（${{ matrix.name }}）=="
           ls -lh *.gz
@@ -124,7 +103,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: bin/targets/${{ matrix.target_dir }}/*.gz
+          path: immortalwrt-imagebuilder-*/bin/targets/${{ matrix.target_dir }}/*.gz
           if-no-files-found: error
           retention-days: 14
 

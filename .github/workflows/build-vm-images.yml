@@ -57,7 +57,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            build-essential gettext python3 rsync wget unzip zstd qemu-utils cpio gawk file
+            build-essential gettext python3 rsync wget unzip zstd qemu-utils cpio gawk file \
+            genisoimage xorriso
 
       - name: 下载并解压 ImageBuilder（${{ matrix.name }}）
         run: |
@@ -87,15 +88,18 @@ jobs:
           set -e
           IB=$(ls -d immortalwrt-imagebuilder-*)
           cd "$IB/bin/targets/${{ matrix.target_dir }}"
+          echo "== 组装阶段产物 =="
+          ls -lh *combined* 2>/dev/null || true
           # 解压可启动整盘（combined / combined-efi）
           for f in *combined*.img.gz; do gzip -dk "$f"; done
-          # qcow2（PVE）与 vmdk（ESXi）
+          # 重新生成 ESXi 友好的 vmdk(streamOptimized) 与 qcow2；先清掉 ImageBuilder 自带的旧文件避免 gzip 冲突
           for img in *combined*.img; do
             base="${img%.img}"
+            rm -f "${base}.qcow2" "${base}.qcow2.gz" "${base}.vmdk" "${base}.vmdk.gz"
             qemu-img convert -f raw -O qcow2 "$img" "${base}.qcow2"
             qemu-img convert -f raw -O vmdk -o subformat=streamOptimized,compat6 "$img" "${base}.vmdk"
           done
-          gzip -9 *combined*.qcow2 *combined*.vmdk *combined*.img
+          gzip -f -9 *combined*.qcow2 *combined*.vmdk *combined*.img
           echo "== 虚拟机磁盘产物（${{ matrix.name }}）=="
           ls -lh *.gz
 
